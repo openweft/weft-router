@@ -1,0 +1,7 @@
+# Build artefacts
+/weft-router
+/dist/
+
+# Editor / OS dross
+.DS_Store
+*.swp
