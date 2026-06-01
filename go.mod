@@ -3,8 +3,18 @@ module github.com/openweft/weft-router
 go 1.26
 
 require (
+	// Prometheus : /metrics scrape, sur un port séparé du data plane
+	// pour que le scrape surface ne partage pas le fate (un handler hang
+	// ne peut pas stall les routes BGP).
 	github.com/prometheus/client_golang v1.20.5
+
+	// Cobra : convention CLI openweft (jamais flag stdlib).
 	github.com/spf13/cobra v1.8.1
+
+// À ajouter quand on remplit les TODO du scaffold :
+//   github.com/osrg/gobgp/v3       — moteur BGP-4 + EVPN + flowspec
+//   github.com/vishvananda/netlink — programmation FIB Linux
+//   github.com/nats-io/nats.go     — transport de config dynamique
 )
 
 require (
