@@ -19,6 +19,7 @@ import (
 
 	api "github.com/osrg/gobgp/v3/api"
 	bgpserver "github.com/osrg/gobgp/v3/pkg/server"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/openweft/weft-router/internal/config"
 )
@@ -49,6 +50,12 @@ type Server struct {
 	routes    chan Route
 	stopWatch context.CancelFunc // cancels the WatchEvent loop
 	serveDone chan struct{}      // closed when bgp.Serve() returns
+
+	// advertised tracks the prefixes we've pushed to GoBGP via AddPath.
+	// Keyed by prefix CIDR ; value is the api.Path object (kept so we
+	// can DeletePath against the same NLRI when reconciling a removal).
+	// Avoids round-tripping ListPath on every Apply.
+	advertised map[string]*api.Path
 }
 
 // Route is the FIB-relevant projection of a GoBGP path. The FIB programmer
@@ -65,9 +72,10 @@ func New(log *slog.Logger, cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("bgp.New: nil config")
 	}
 	return &Server{
-		log:    log,
-		cfg:    cfg,
-		routes: make(chan Route, 1024),
+		log:        log,
+		cfg:        cfg,
+		routes:     make(chan Route, 1024),
+		advertised: make(map[string]*api.Path),
 	}, nil
 }
 
@@ -272,16 +280,11 @@ type PrefixAdvertisement struct {
 
 // ApplyPrefixes reconciles the advertised-prefix set.
 //
-// Building an api.Path requires marshaling protobuf attribute types
-// (NLRI prefix, OriginAttribute, NextHop, AsPath, …). That's verbose
-// enough to deserve its own follow-up commit — for now the method
-// validates the input and logs the intent, returning nil. weft-network
-// will surface unhonored prefixes via its own reconcile-status when
-// this is wired.
-//
-// TODO: implement via bgp.AddPath / DeletePath. Use anypb.New on
-// api.IPAddressPrefix for the NLRI, api.OriginAttribute{Origin:0} for
-// IGP origin, api.NextHopAttribute for the next-hop. Diff by prefix.
+// Diff is done against an internal map (s.advertised) populated as we
+// AddPath ; that avoids round-tripping ListPath every reconcile. The
+// map keys are the prefix CIDR strings, the values are the api.Path
+// we'd hand back to DeletePath. Idempotent like ApplyPeers — duplicate
+// payloads from NATS just no-op past the first reconcile.
 func (s *Server) ApplyPrefixes(ctx context.Context, prefixes []PrefixAdvertisement) error {
 	s.mu.Lock()
 	bgp := s.bgp
@@ -289,8 +292,121 @@ func (s *Server) ApplyPrefixes(ctx context.Context, prefixes []PrefixAdvertiseme
 	if bgp == nil {
 		return fmt.Errorf("bgp: not started")
 	}
-	s.log.Info("apply prefixes (stub)", "count", len(prefixes))
+
+	want := map[string]PrefixAdvertisement{}
+	for _, p := range prefixes {
+		want[p.Prefix] = p
+	}
+
+	// Add prefixes we haven't advertised yet.
+	for _, p := range prefixes {
+		s.mu.Lock()
+		_, already := s.advertised[p.Prefix]
+		s.mu.Unlock()
+		if already {
+			continue
+		}
+		path, err := pathForAdvertisement(p)
+		if err != nil {
+			return fmt.Errorf("build path %s: %w", p.Prefix, err)
+		}
+		if _, err := bgp.AddPath(ctx, &api.AddPathRequest{
+			TableType: api.TableType_GLOBAL,
+			Path:      path,
+		}); err != nil {
+			return fmt.Errorf("AddPath %s: %w", p.Prefix, err)
+		}
+		s.mu.Lock()
+		s.advertised[p.Prefix] = path
+		s.mu.Unlock()
+		s.log.Info("prefix advertised", "prefix", p.Prefix, "nexthop", p.NextHop)
+	}
+
+	// Withdraw prefixes we'd previously advertised that aren't in the
+	// desired set anymore.
+	s.mu.Lock()
+	stale := make([]string, 0)
+	for prefix := range s.advertised {
+		if _, ok := want[prefix]; !ok {
+			stale = append(stale, prefix)
+		}
+	}
+	s.mu.Unlock()
+	for _, prefix := range stale {
+		s.mu.Lock()
+		path := s.advertised[prefix]
+		s.mu.Unlock()
+		if err := bgp.DeletePath(ctx, &api.DeletePathRequest{
+			TableType: api.TableType_GLOBAL,
+			Path:      path,
+		}); err != nil {
+			return fmt.Errorf("DeletePath %s: %w", prefix, err)
+		}
+		s.mu.Lock()
+		delete(s.advertised, prefix)
+		s.mu.Unlock()
+		s.log.Info("prefix withdrawn", "prefix", prefix)
+	}
 	return nil
+}
+
+// pathForAdvertisement builds the GoBGP api.Path for one advertisement.
+// Encodes the NLRI (IPv4 or IPv6 prefix), Origin (IGP), optional
+// NextHop, and optional Communities — the minimum a BGP-4 speaker needs
+// to advertise a prefix and have peers accept it.
+//
+// Pure : no GoBGP server interaction, safe to unit-test from any host.
+func pathForAdvertisement(p PrefixAdvertisement) (*api.Path, error) {
+	ip, ipnet, err := net.ParseCIDR(p.Prefix)
+	if err != nil {
+		return nil, fmt.Errorf("parse prefix: %w", err)
+	}
+	prefixLen, _ := ipnet.Mask.Size()
+	isV4 := ip.To4() != nil
+
+	nlri, err := anypb.New(&api.IPAddressPrefix{
+		Prefix:    ipnet.IP.String(),
+		PrefixLen: uint32(prefixLen),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal nlri: %w", err)
+	}
+
+	attrs := make([]*anypb.Any, 0, 3)
+	// Origin = IGP (0). RFC 4271 §4.3 — "the path information eligible
+	// for the BGP decision process". IGP is the standard for tenant
+	// advertised prefixes ; EGP/Incomplete are legacy.
+	originAttr, err := anypb.New(&api.OriginAttribute{Origin: 0})
+	if err != nil {
+		return nil, fmt.Errorf("marshal origin: %w", err)
+	}
+	attrs = append(attrs, originAttr)
+
+	if p.NextHop != "" {
+		nhAttr, err := anypb.New(&api.NextHopAttribute{NextHop: p.NextHop})
+		if err != nil {
+			return nil, fmt.Errorf("marshal nexthop: %w", err)
+		}
+		attrs = append(attrs, nhAttr)
+	}
+
+	if len(p.Communities) > 0 {
+		cAttr, err := anypb.New(&api.CommunitiesAttribute{Communities: p.Communities})
+		if err != nil {
+			return nil, fmt.Errorf("marshal communities: %w", err)
+		}
+		attrs = append(attrs, cAttr)
+	}
+
+	family := &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}
+	if !isV4 {
+		family = &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}
+	}
+	return &api.Path{
+		Nlri:   nlri,
+		Pattrs: attrs,
+		Family: family,
+	}, nil
 }
 
 // routeFromPath converts a GoBGP api.Path to the FIB-friendly Route shape.

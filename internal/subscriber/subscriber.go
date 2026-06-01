@@ -80,8 +80,8 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			s.log.Info("nats reconnected", "url", c.ConnectedUrl())
 		}),
 	}
-	if seed := nkeySeedPath; fileExists(seed) {
-		opt, err := nats.NkeyOptionFromSeed(seed)
+	if statExists(nkeySeedPath) {
+		opt, err := nats.NkeyOptionFromSeed(nkeySeedPath)
 		if err != nil {
 			return fmt.Errorf("nats nkey: %w", err)
 		}
@@ -125,17 +125,6 @@ func (s *Subscriber) handle(ctx context.Context, data []byte) {
 }
 
 // nkeySeedPath is the conventional location weft-microvm-agent drops the
-// per-tenant NATS NKey seed (chmod 600). Same path used here for
-// symmetry. Tests override via the unexported test hook below.
+// per-tenant NATS NKey seed (chmod 600). Same path used here for symmetry.
+// Tests override via package-private assignment.
 var nkeySeedPath = "/run/weft/nats/nats.nkey"
-
-// fileExists is small enough to inline rather than pull in a helper pkg.
-func fileExists(p string) bool {
-	if p == "" {
-		return false
-	}
-	// os.Stat would be more proper, but we avoid the import here because
-	// the rest of the package is os-free. The subscriber.go already pulls
-	// log/slog so a simple try-open is fine ; keep it minimal.
-	return statExists(p)
-}
