@@ -21,6 +21,7 @@ require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/osrg/gobgp/v3 v3.37.0
 	github.com/vishvananda/netlink v1.3.1
+	google.golang.org/protobuf v1.34.2
 )
 
 require (
@@ -59,7 +60,6 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230525234030-28d5490b6b19 // indirect
 	google.golang.org/grpc v1.56.3 // indirect
-	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

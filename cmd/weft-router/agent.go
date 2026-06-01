@@ -15,6 +15,7 @@ import (
 	"github.com/openweft/weft-router/internal/config"
 	"github.com/openweft/weft-router/internal/fib"
 	"github.com/openweft/weft-router/internal/metrics"
+	"github.com/openweft/weft-router/internal/statusemitter"
 	"github.com/openweft/weft-router/internal/subscriber"
 	"github.com/spf13/cobra"
 )
@@ -31,18 +32,20 @@ import (
 // on the next agent).
 func newAgentCmd() *cobra.Command {
 	var (
-		configPath    string
-		metricsAddr   string
-		shutdownGrace time.Duration
+		configPath     string
+		metricsAddr    string
+		shutdownGrace  time.Duration
+		statusInterval time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "agent",
 		Short: "Run the weft-router data-plane daemon",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAgent(cmd.Context(), agentOptions{
-				configPath:    configPath,
-				metricsAddr:   metricsAddr,
-				shutdownGrace: shutdownGrace,
+				configPath:     configPath,
+				metricsAddr:    metricsAddr,
+				shutdownGrace:  shutdownGrace,
+				statusInterval: statusInterval,
 			})
 		},
 	}
@@ -52,13 +55,16 @@ func newAgentCmd() *cobra.Command {
 		"Address the Prometheus /metrics endpoint listens on (separate from data-plane)")
 	cmd.Flags().DurationVar(&shutdownGrace, "shutdown-grace", 10*time.Second,
 		"Maximum wait for BGP sessions to drain cleanly before forcing exit")
+	cmd.Flags().DurationVar(&statusInterval, "status-interval", 10*time.Second,
+		"How often the status emitter publishes RouterStatus to weft-network")
 	return cmd
 }
 
 type agentOptions struct {
-	configPath    string
-	metricsAddr   string
-	shutdownGrace time.Duration
+	configPath     string
+	metricsAddr    string
+	shutdownGrace  time.Duration
+	statusInterval time.Duration
 }
 
 func runAgent(ctx context.Context, opts agentOptions) error {
@@ -107,6 +113,23 @@ func runAgent(ctx context.Context, opts agentOptions) error {
 	go func() {
 		if err := sub.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("subscriber exited", "err", err)
+			cancel()
+		}
+	}()
+
+	// Status emitter : reverse direction of the subscriber. Polls the
+	// BGP server for peer state every opts.statusInterval and publishes
+	// RouterStatus on weft.router.<tenant>.status. weft-network's
+	// statusreceiver picks that up and refreshes Router.Status /
+	// PeerState in the store. Best-effort like the rest of the data
+	// plane — outages and races are tolerated.
+	em, err := statusemitter.New(log, cfg, bgpSrv, opts.statusInterval)
+	if err != nil {
+		return fmt.Errorf("statusemitter: %w", err)
+	}
+	go func() {
+		if err := em.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error("statusemitter exited", "err", err)
 			cancel()
 		}
 	}()

@@ -270,6 +270,91 @@ func (s *Server) ApplyPeers(ctx context.Context, peers []PeerConfig) error {
 	return nil
 }
 
+// PeerStatus is the live state of one BGP neighbour, projected from
+// GoBGP's api.PeerState. Emitted by the statusemitter to weft-network.
+type PeerStatus struct {
+	Address          string // peer IP
+	State            string // BGP-4 session state per RFC 4271 §8 :
+	//                       "Idle" | "Connect" | "Active" | "OpenSent"
+	//                       | "OpenConfirm" | "Established"
+	UptimeSec        int64  // seconds since last state transition to Established (0 otherwise)
+	ReceivedPrefixes int    // RIB-in count from this neighbour
+}
+
+// PeerStatusList queries GoBGP for the live state of every configured
+// peer and returns the FIB-friendly projection. Pure read — doesn't
+// mutate peers. Suitable for periodic polling by the statusemitter.
+func (s *Server) PeerStatusList(ctx context.Context) ([]PeerStatus, error) {
+	s.mu.Lock()
+	bgp := s.bgp
+	s.mu.Unlock()
+	if bgp == nil {
+		return nil, fmt.Errorf("bgp: not started")
+	}
+	var out []PeerStatus
+	err := bgp.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
+		ps := PeerStatus{}
+		if p.Conf != nil {
+			ps.Address = p.Conf.NeighborAddress
+		}
+		if p.State != nil {
+			ps.State = normalisePeerState(p.State.SessionState.String())
+		}
+		// Uptime / received-prefix count live under different sub-types
+		// depending on whether the session is up. Defensive nil checks
+		// — GoBGP populates them lazily.
+		if t := p.GetTimers(); t != nil && t.State != nil && t.State.Uptime != nil {
+			ps.UptimeSec = t.State.Uptime.GetSeconds()
+		}
+		if afis := p.AfiSafis; len(afis) > 0 {
+			for _, af := range afis {
+				if af.State != nil {
+					ps.ReceivedPrefixes += int(af.State.Received)
+				}
+			}
+		}
+		out = append(out, ps)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ListPeer: %w", err)
+	}
+	return out, nil
+}
+
+// AdvertisedPrefixCount returns the number of prefixes weft-network
+// asked us to advertise. Cheap, doesn't touch GoBGP — reads the local
+// tracking map we keep in sync with ApplyPrefixes.
+func (s *Server) AdvertisedPrefixCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.advertised)
+}
+
+// normalisePeerState maps GoBGP's all-caps enum names ("ESTABLISHED",
+// "OPENSENT") to RFC 4271 §8 mixed-case ("Established", "OpenSent")
+// so the JSON wire shape matches what weft-network/statusreceiver
+// expects in its rollup logic. Unknown values pass through verbatim
+// so a future GoBGP enum addition surfaces as itself rather than as
+// the empty string.
+func normalisePeerState(raw string) string {
+	switch raw {
+	case "IDLE":
+		return "Idle"
+	case "CONNECT":
+		return "Connect"
+	case "ACTIVE":
+		return "Active"
+	case "OPENSENT":
+		return "OpenSent"
+	case "OPENCONFIRM":
+		return "OpenConfirm"
+	case "ESTABLISHED":
+		return "Established"
+	default:
+		return raw
+	}
+}
+
 // PrefixAdvertisement describes one prefix the router advertises out
 // to its peers (the tenant's owned space).
 type PrefixAdvertisement struct {
