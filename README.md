@@ -83,6 +83,28 @@ pkgx task build
 pkgx task build-linux
 ```
 
+## OCI image
+
+```sh
+# Multi-arch local build (linux/amd64 + linux/arm64)
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --build-arg VERSION=$(git describe --tags --always --dirty) \
+  --build-arg COMMIT=$(git rev-parse --short HEAD) \
+  --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  -t ghcr.io/openweft/weft-router:dev .
+
+# Tag-driven publish to ghcr.io/openweft/weft-router (via the
+# release.yml workflow's `oci` job — fires on a vX.Y.Z tag or a
+# manual workflow_dispatch run).
+git tag v0.1.0 && git push --tags
+```
+
+Consumed by weft-network's lifecycle path : when a Router with
+backend=gobgp is created, the orchestrator spawns
+`ghcr.io/openweft/weft-router:<tag>` as a micro-VM with the
+tenant's config mounted at `/etc/weft-router/config.hcl` (virtio-fs
+/ 9p).
+
 ## Run
 
 ```sh
