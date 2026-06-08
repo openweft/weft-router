@@ -17,6 +17,7 @@ import (
 	"github.com/openweft/weft-router/internal/metrics"
 	"github.com/openweft/weft-router/internal/statusemitter"
 	"github.com/openweft/weft-router/internal/subscriber"
+	weftslognats "github.com/openweft/weft-slognats"
 	"github.com/spf13/cobra"
 )
 
@@ -68,12 +69,27 @@ type agentOptions struct {
 }
 
 func runAgent(ctx context.Context, opts agentOptions) error {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Identifier for the slog-NATS subject. Per the host convention
+	// for weft-router (one router microVM per host/tenant), fall back
+	// to $WEFT_HOST_UUID then os.Hostname so the subject is well-formed
+	// before any config load can fail.
+	id := os.Getenv("WEFT_HOST_UUID")
+	if id == "" {
+		if h, err := os.Hostname(); err == nil {
+			id = h
+		} else {
+			id = "unknown"
+		}
+	}
+	log, logCloser := weftslognats.SetupFromEnv("weft.router." + id + ".log")
+	defer logCloser.Close()
+	slog.SetDefault(log)
 
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		return fmt.Errorf("config %s: %w", opts.configPath, err)
 	}
+
 	log.Info("weft-router starting",
 		"tenant", cfg.TenantUUID, "asn", cfg.LocalASN, "router_id", cfg.RouterID)
 
