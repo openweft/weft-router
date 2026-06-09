@@ -19,7 +19,7 @@ require (
 
 require (
 	github.com/nats-io/nats.go v1.52.0
-	github.com/openweft/weft-slognats v0.2.0
+	github.com/openweft/weft-slognats v0.3.0
 	github.com/osrg/gobgp/v3 v3.37.0
 	github.com/vishvananda/netlink v1.3.1
 	google.golang.org/protobuf v1.34.2

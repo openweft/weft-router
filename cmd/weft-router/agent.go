@@ -84,6 +84,7 @@ func runAgent(ctx context.Context, opts agentOptions) error {
 	log, logCloser := weftslognats.SetupFromEnv("weft.router." + id + ".log")
 	defer logCloser.Close()
 	slog.SetDefault(log)
+	defer weftslognats.PanicReporter("weft-router")
 
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
