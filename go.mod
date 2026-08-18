@@ -1,6 +1,6 @@
 module github.com/openweft/weft-router
 
-go 1.26
+go 1.26.4
 
 require (
 	// Prometheus : /metrics scrape, sur un port séparé du data plane
