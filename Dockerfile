@@ -9,7 +9,14 @@
 # equivalent) per Router resource it manages.
 #
 # Multi-arch : buildx sets TARGETOS / TARGETARCH which we forward to
-# `go build`. Publish covers linux/amd64 + linux/arm64.
+# `go build`. Publish covers linux/amd64 + linux/arm64 + linux/riscv64
+# + linux/loong64 — the build stage is pinned to --platform=$BUILDPLATFORM
+# (the runner's own native arch) rather than the target one, so it
+# cross-compiles instead of running the Go toolchain itself under QEMU
+# emulation for every target; the scratch final stage has no OS content
+# of its own, so it never needs a base-image manifest for the target
+# platform either. This is why loong64 works here even though the
+# official golang image publishes no linux/loong64 manifest at all.
 #
 # Build args :
 #   - VERSION : git describe output, stamped via -ldflags.
@@ -17,7 +24,7 @@
 #   - DATE    : RFC-3339 UTC build timestamp.
 #
 # Local build :
-#   docker buildx build --platform linux/amd64,linux/arm64 \
+#   docker buildx build --platform linux/amd64,linux/arm64,linux/riscv64,linux/loong64 \
 #     --build-arg VERSION=$(git describe --tags --always --dirty) \
 #     --build-arg COMMIT=$(git rev-parse --short HEAD) \
 #     --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
