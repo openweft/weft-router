@@ -32,7 +32,12 @@ jobs:
         run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o dist/weft-router-linux-amd64 ./cmd/weft-router
       - uses: actions/upload-artifact@v7
         with:
-          name: weft-router-${{ github.ref_name }}
+          # github.ref_name is a PR merge ref ("4/merge") on pull_request
+          # events, and artifact names can't contain "/" — head_ref (the
+          # PR's actual source branch name) is only set on pull_request,
+          # so it takes priority there and falls back to ref_name for a
+          # tag push or workflow_dispatch.
+          name: weft-router-${{ github.head_ref || github.ref_name }}
           path: dist/
 
   oci:
