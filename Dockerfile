@@ -30,7 +30,7 @@
 #     --build-arg DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 #     -t ghcr.io/openweft/weft-router:dev .
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.27.1
 
 # ---- build stage --------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build

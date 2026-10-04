@@ -14,7 +14,7 @@ func TestListenPortFromAddr(t *testing.T) {
 		want int32
 	}{
 		{"", -1},
-		{":0", -1},     // explicit zero → no listen
+		{":0", -1}, // explicit zero → no listen
 		{":179", 179},
 		{":bogus", -1}, // unparseable → no listen
 		{"10.0.0.1:179", 179},

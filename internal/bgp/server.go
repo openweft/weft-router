@@ -273,12 +273,12 @@ func (s *Server) ApplyPeers(ctx context.Context, peers []PeerConfig) error {
 // PeerStatus is the live state of one BGP neighbour, projected from
 // GoBGP's api.PeerState. Emitted by the statusemitter to weft-network.
 type PeerStatus struct {
-	Address          string // peer IP
-	State            string // BGP-4 session state per RFC 4271 §8 :
+	Address string // peer IP
+	State   string // BGP-4 session state per RFC 4271 §8 :
 	//                       "Idle" | "Connect" | "Active" | "OpenSent"
 	//                       | "OpenConfirm" | "Established"
-	UptimeSec        int64  // seconds since last state transition to Established (0 otherwise)
-	ReceivedPrefixes int    // RIB-in count from this neighbour
+	UptimeSec        int64 // seconds since last state transition to Established (0 otherwise)
+	ReceivedPrefixes int   // RIB-in count from this neighbour
 }
 
 // PeerStatusList queries GoBGP for the live state of every configured
